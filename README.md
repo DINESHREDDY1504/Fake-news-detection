@@ -11,5 +11,9 @@ This system is currently under development. Its goal is to use machine learning,
 *   **Image Analysis:** Analyzing images to detect potential manipulation or inconsistencies using OpenCV and Pillow.
 *   **User Interface:** A web interface built with Streamlit for users to input text or upload images and receive predictions.
 
+## Documentation
+
+*   [Dataset Requirements and Schema](docs/dataset_requirements.md): Details the data schema, labeling policies, and requirements for future dataset ingestion.
+
 ## Project Status
-Currently, this project contains only the foundational folder structure and basic utilities to support future development. We are not yet training models or downloading large datasets.
+Currently, this project contains only the foundational folder structure, documentation, and basic utilities to support future development. We are not yet training models or downloading large datasets.
