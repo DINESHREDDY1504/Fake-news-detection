@@ -57,3 +57,32 @@ Different datasets use varying terminology (e.g., "True", "Mostly True", "Pants 
 ## 6. Unresolved Decisions
 *   How should we handle multi-modal records where the text claims one thing but the image implies another?
 *   Should we establish a separate tertiary classification category specifically for "Satire"?
+
+## 7. Dataset Inspection Tool
+
+Before loading a new dataset into the application, use the provided inspection script to verify its contents, constraints, and identify potential data quality issues.
+
+### Usage
+
+You can run the script by either providing a direct file path and options, or by referencing a registered dataset.
+
+**Using a Registered Dataset ID (Recommended):**
+
+```bash
+python scripts/inspect_dataset.py --dataset-id example_fake_news_dataset \
+    --label-col "label" \
+    --preview-rows 5
+```
+
+**Using a Direct File Path:**
+
+```bash
+python scripts/inspect_dataset.py <path_to_dataset> \
+    --delimiter "," \
+    --encoding "utf-8" \
+    --label-col "label" \
+    --image-col "image_path" \
+    --preview-rows 5
+```
+
+The tool will report row counts, missing values, label distributions, and detect malformed image paths/URLs without attempting to download them. If an invalid or empty file is passed, the tool will safely exit with an error.
