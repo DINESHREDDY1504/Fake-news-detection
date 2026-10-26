@@ -15,5 +15,12 @@ This system is currently under development. Its goal is to use machine learning,
 
 *   [Dataset Requirements and Schema](docs/dataset_requirements.md): Details the data schema, labeling policies, and requirements for future dataset ingestion.
 
+## Data Layout and Loading
+
+The system handles both text-only and multimodal records using the `DatasetLoader` module located in `src/data/loader.py`.
+*   **Canonical Schema:** Datasets must match the schema outlined in `docs/dataset_requirements.md`. Crucial fields include `article_id`, `headline`, and `label`.
+*   **Multimodal Support:** Records may optionally include an `image_path` linking to a local file or remote URL. Local paths are safely resolved relative to a designated `data_root` directory.
+*   **Image Availability:** The loader can check if images (local or remote) are accessible without fully downloading them. Missing images for text-only records are properly handled.
+
 ## Project Status
 Currently, this project contains only the foundational folder structure, documentation, and basic utilities to support future development. We are not yet training models or downloading large datasets.
