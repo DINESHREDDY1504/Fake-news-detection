@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""
+Dataset Integrity Report Generator.
+
+This script validates a dataset against the canonical schema defined in
+docs/dataset_requirements.md. It reports on missing fields, unknown labels,
+duplicates, and valid image references.
+"""
+
+import argparse
+import hashlib
+import json
+import logging
+import os
+import sys
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Dict, List, Tuple, Any
+
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.data.dataset import load_dataset, REQUIRED_FIELDS, OPTIONAL_FIELDS, VALID_LABELS
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
+def calculate_checksum(filepath: str) -> str:
+    """Calculates the SHA256 checksum of a file."""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(filepath, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        logging.error(f"Error calculating checksum for {filepath}: {e}")
+        return ""
+
+
+def validate_records(records: List[Dict[str, Any]], verify_images: bool) -> Dict[str, Any]:
+    """Validates a list of records and returns report statistics."""
+    report = {
+        "total_records": len(records),
+        "missing_required": 0,
+        "missing_optional_counts": Counter(),
+        "unknown_labels": 0,
+        "duplicate_ids": 0,
+        "duplicate_text": 0,
+        "class_distribution": Counter(),
+        "image_stats": {
+            "total_references": 0,
+            "missing_local_files": 0,
+            "unreadable_files": 0,
+        },
+        "critical_failures": False
+    }
+
+    seen_ids = set()
+    seen_texts = set()
+
+    for record in records:
+        # Check required fields
+        is_missing_req = False
+        for field in REQUIRED_FIELDS:
+            if field not in record or record[field] is None or record[field] == "":
+                is_missing_req = True
+                break
+        if is_missing_req:
+            report["missing_required"] += 1
+            report["critical_failures"] = True
+
+        # Check optional fields
+        for field in OPTIONAL_FIELDS:
+            if field not in record or record[field] is None or record[field] == "":
+                report["missing_optional_counts"][field] += 1
+
+        # Check labels
+        label = record.get("label")
+        if label:
+            label = str(label).lower()
+            if label not in VALID_LABELS:
+                report["unknown_labels"] += 1
+            else:
+                report["class_distribution"][label] += 1
+
+        # Check duplicates
+        article_id = record.get("article_id")
+        if article_id:
+            if article_id in seen_ids:
+                report["duplicate_ids"] += 1
+                report["critical_failures"] = True
+            seen_ids.add(article_id)
+
+        headline = str(record.get("headline", "")).strip()
+        body = str(record.get("body", "")).strip()
+        full_text = headline + " " + body
+        if full_text:
+            if full_text in seen_texts:
+                report["duplicate_text"] += 1
+            seen_texts.add(full_text)
+
+        # Check image references
+        image_path = record.get("image_path")
+        if image_path:
+            report["image_stats"]["total_references"] += 1
+            # Check local files (heuristic: doesn't start with http)
+            if not str(image_path).startswith("http"):
+                if not os.path.exists(image_path):
+                    report["image_stats"]["missing_local_files"] += 1
+                elif verify_images and HAS_PIL:
+                    try:
+                        with Image.open(image_path) as img:
+                            img.verify()
+                    except Exception:
+                        report["image_stats"]["unreadable_files"] += 1
+
+    return report
+
+
+def check_cross_split_duplicates(splits: Dict[str, List[Dict[str, Any]]]) -> Dict[str, int]:
+    """Checks for ID and text duplicates across different dataset splits."""
+    report = {"cross_split_duplicate_ids": 0, "cross_split_duplicate_text": 0}
+    if len(splits) < 2:
+        return report
+
+    seen_ids = {}
+    seen_texts = {}
+    cross_counted_ids = set()
+    cross_counted_texts = set()
+
+    for split_name, records in splits.items():
+        for record in records:
+            article_id = record.get("article_id")
+            if article_id:
+                if article_id in seen_ids and seen_ids[article_id] != split_name:
+                    if article_id not in cross_counted_ids:
+                        report["cross_split_duplicate_ids"] += 1
+                        cross_counted_ids.add(article_id)
+                seen_ids[article_id] = split_name
+
+            headline = str(record.get("headline", "")).strip()
+            body = str(record.get("body", "")).strip()
+            full_text = headline + " " + body
+            if full_text:
+                if full_text in seen_texts and seen_texts[full_text] != split_name:
+                    if full_text not in cross_counted_texts:
+                        report["cross_split_duplicate_text"] += 1
+                        cross_counted_texts.add(full_text)
+                seen_texts[full_text] = split_name
+
+    return report
+
+
+def generate_human_readable_report(report_data: Dict[str, Any]) -> str:
+    """Generates a text summary of the report."""
+    lines = [
+        "Dataset Integrity Report",
+        "========================",
+        f"Execution Timestamp: {report_data['timestamp']}",
+        "",
+        "Disclaimer: These integrity checks validate schema and internal consistency.",
+        "They DO NOT establish the factual truth of any records within the dataset.",
+        "",
+        "Input Files:"
+    ]
+    for file_info in report_data["input_files"]:
+        lines.append(f"  - {file_info['path']} (SHA256: {file_info['checksum'][:8]}...)")
+
+    lines.extend([
+        "",
+        "Validation Statistics:",
+        f"  Total Records: {report_data['total_records']}",
+        f"  Missing Required Fields: {report_data['missing_required']}",
+        f"  Unknown Labels: {report_data['unknown_labels']}",
+        f"  Duplicate IDs (within files): {report_data['duplicate_ids']}",
+        f"  Duplicate Text (within files): {report_data['duplicate_text']}",
+    ])
+
+    if "cross_split_duplicate_ids" in report_data:
+        lines.append(f"  Cross-Split Duplicate IDs: {report_data['cross_split_duplicate_ids']}")
+        lines.append(f"  Cross-Split Duplicate Text: {report_data['cross_split_duplicate_text']}")
+
+    lines.extend([
+        "",
+        "Class Distribution:"
+    ])
+    for label, count in report_data["class_distribution"].items():
+         lines.append(f"  {label}: {count}")
+
+    lines.extend([
+        "",
+        "Image Statistics:",
+        f"  Total References: {report_data['image_stats']['total_references']}",
+        f"  Missing Local Files: {report_data['image_stats']['missing_local_files']}",
+        f"  Unreadable Files: {report_data['image_stats']['unreadable_files']}",
+    ])
+
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Dataset Integrity Report Generator")
+    parser.add_argument("dataset_paths", nargs="+", help="Paths to dataset files (JSON/JSONL)")
+    parser.add_argument("--output-dir", default=".", help="Directory to save the reports")
+    parser.add_argument("--verify-images", action="store_true", help="Verify local images can be decoded (requires Pillow)")
+    parser.add_argument("--fail-on-critical", action="store_true", help="Exit with nonzero status on critical failures (missing required fields, duplicate IDs)")
+
+    args = parser.parse_args()
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    splits = {}
+    input_files_info = []
+
+    for path in args.dataset_paths:
+        if not os.path.exists(path):
+            logging.error(f"File not found: {path}")
+            continue
+
+        checksum = calculate_checksum(path)
+        input_files_info.append({"path": path, "checksum": checksum})
+        records = load_dataset(path)
+        splits[os.path.basename(path)] = records
+
+    if not splits:
+        logging.error("No valid dataset files loaded.")
+        sys.exit(1)
+
+    # Validate each split separately to avoid cross-split duplicates being counted as within-split duplicates
+    report_data = {
+        "total_records": 0,
+        "missing_required": 0,
+        "missing_optional_counts": Counter(),
+        "unknown_labels": 0,
+        "duplicate_ids": 0,
+        "duplicate_text": 0,
+        "class_distribution": Counter(),
+        "image_stats": {
+            "total_references": 0,
+            "missing_local_files": 0,
+            "unreadable_files": 0,
+        },
+        "critical_failures": False
+    }
+
+    for split_records in splits.values():
+        split_report = validate_records(split_records, args.verify_images)
+        report_data["total_records"] += split_report["total_records"]
+        report_data["missing_required"] += split_report["missing_required"]
+        report_data["unknown_labels"] += split_report["unknown_labels"]
+        report_data["duplicate_ids"] += split_report["duplicate_ids"]
+        report_data["duplicate_text"] += split_report["duplicate_text"]
+        if split_report["critical_failures"]:
+            report_data["critical_failures"] = True
+
+        report_data["missing_optional_counts"].update(split_report["missing_optional_counts"])
+        report_data["class_distribution"].update(split_report["class_distribution"])
+
+        report_data["image_stats"]["total_references"] += split_report["image_stats"]["total_references"]
+        report_data["image_stats"]["missing_local_files"] += split_report["image_stats"]["missing_local_files"]
+        report_data["image_stats"]["unreadable_files"] += split_report["image_stats"]["unreadable_files"]
+
+    # Cross-split validation
+    cross_split_report = check_cross_split_duplicates(splits)
+    report_data.update(cross_split_report)
+    if report_data.get("cross_split_duplicate_ids", 0) > 0:
+        report_data["critical_failures"] = True
+
+    # Assemble final report dict
+    final_report = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "input_files": input_files_info,
+        **report_data,
+        "missing_optional_counts": dict(report_data["missing_optional_counts"]), # Convert counter to dict
+        "class_distribution": dict(report_data["class_distribution"]),
+    }
+
+    # Save JSON report
+    json_path = os.path.join(args.output_dir, "report.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(final_report, f, indent=2)
+    logging.info(f"Saved JSON report to {json_path}")
+
+    # Save TXT report
+    txt_path = os.path.join(args.output_dir, "report.txt")
+    human_report = generate_human_readable_report(final_report)
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(human_report)
+    logging.info(f"Saved human-readable report to {txt_path}")
+
+    print(human_report)
+
+    if args.fail_on_critical and final_report.get("critical_failures"):
+        logging.error("Critical integrity checks failed.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
