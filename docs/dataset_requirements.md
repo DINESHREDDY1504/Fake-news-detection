@@ -57,3 +57,35 @@ Different datasets use varying terminology (e.g., "True", "Mostly True", "Pants 
 ## 6. Unresolved Decisions
 *   How should we handle multi-modal records where the text claims one thing but the image implies another?
 *   Should we establish a separate tertiary classification category specifically for "Satire"?
+
+## 7. Inspecting and Validating Datasets Locally (Phase 1)
+
+Before proceeding to Phase 2 (model training), all incoming datasets must be validated using the built-in dataset loader and integrity checks. No network connection is required, and source data is never modified by the loader.
+
+### Usage Example
+To validate a dataset against the canonical schema and view its integrity report, use the `DatasetLoader`:
+
+```python
+from src.dataset_loader import DatasetLoader
+import pprint
+
+# Example: Validate a local CSV dataset
+# By default, rows with 'unknown' labels are included.
+# Set strict_labels=True to exclude them.
+loader = DatasetLoader(strict_labels=True)
+records = loader.load("data/my_local_dataset.csv")
+
+# Generate the integrity report
+report = loader.get_integrity_report()
+print("Integrity Report:")
+pprint.pprint(report)
+```
+
+### Running Tests
+To ensure the foundation remains reliable, run the provided automated test suite:
+
+```bash
+pytest tests/test_dataset.py -v
+```
+
+This will run all 10 foundational tests that verify dataset configuration validation, required-field handling, label normalization, unknown-label rejection, multimodal loading, source data immutability, and missing/empty file edge cases.
