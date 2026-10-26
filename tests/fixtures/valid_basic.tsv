@@ -1,0 +1,4 @@
+article_id	headline	body	label	image_path	source_name	source_url	publication_date	dataset_name	original_record_id
+test_1	Valid Real Headline	Body of valid real	Real			http://example.com	2023-10-01	test_dataset	orig_1
+test_2	Valid Fake Headline	Body of valid fake	False			http://example.com/2	2023-10-02	test_dataset	orig_2
+test_3	Valid Mixed Headline		Half-True			http://example.com/3	2023-10-03	test_dataset	orig_3
